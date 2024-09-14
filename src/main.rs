@@ -4,9 +4,11 @@ mod ctfd;
 
 use std::collections::HashMap;
 
-use ctfd::{CTFdClient, ChallengeSolver, TeamId, TeamPosition};
+use ctfd::{CTFdClient, ChallengeSolver};
 use serenity::http::Http;
 use serenity::model::webhook::Webhook;
+use serenity::builder::{CreateEmbed, ExecuteWebhook};
+use serenity::model::Timestamp;
 
 use clap::Parser;
 use rusqlite::Connection;
@@ -32,7 +34,7 @@ struct Args {
     announce_first_blood_only: bool,
 
     /// Whether to skip announcing existing solves
-    #[arg(short, long, default_value = "true")]
+    #[arg(short, long, default_value = "false")]
     skip_announcing_existing_solves: bool,
 
     /// Refresh interval in seconds
@@ -90,21 +92,20 @@ async fn announce_solves(
             {
                 println!("Announcing solve for {} by {}", challenge.name, solver.name);
 
-                // Send a message to the webhook
-                webhook
-                    .execute(&http, false, |w| {
-                        // If this is the first solve
-                        if !announced_solves.contains_key(&challenge.id) {
-                            w.content(format!(
-                                "First blood for **{}** goes to **{}**! :knife::drop_of_blood:",
-                                challenge.name, solver.name
-                            ))
-                        } else {
-                            w.content(format!("{} just solved {}! :tada:", solver.name, challenge.name))
-                        }
-                    })
-                    .await
-                    .expect("Could not execute webhook.");
+                let embed = CreateEmbed::new()
+                .timestamp(Timestamp::now())
+                .color(0xdc2949)
+                .description(if !announced_solves.contains_key(&challenge.id) {
+                    format!(
+                        ":drop_of_blood: team **{}** has taken first blood on **{}**!",
+                        solver.name, challenge.name
+                    )
+                } else {
+                    format!("{} just solved {}! :tada:", solver.name, challenge.name)
+                });
+
+                let builder = ExecuteWebhook::new().embed(embed);
+                webhook.execute(&http, false, builder).await.expect("Could not execute webhook.");
 
                 // Add the solve to the database
                 db_conn
@@ -121,97 +122,6 @@ async fn announce_solves(
                     .push(solver);
             }
         }
-    }
-}
-
-/// Announce when any team in the top 10 gets overtaken by any other team
-async fn announce_top_10_overtakes(
-    http: &Http,
-    webhook: &Webhook,
-    ctfd_client: &CTFdClient,
-    db_conn: &Connection,
-)
-{
-    // Get the previous top 10 teams
-    let mut statement = db_conn
-        .prepare("SELECT id, position FROM top_10_teams;")
-        .unwrap();
-
-    let previous_top_10_iter = statement
-        .query_map([], |row| {
-            Ok(
-                (
-                row.get::<_, TeamId>(0).unwrap(),
-                row.get::<_, TeamPosition>(1).unwrap(),
-                )
-            )
-        })
-        .unwrap();
- 
-    let mut previous_top_10_teams: HashMap<TeamId, TeamPosition> = HashMap::new();
-
-    for previous_top_10 in previous_top_10_iter {
-        let (team_id , position) = previous_top_10.unwrap();
-
-        previous_top_10_teams.insert(team_id, position);
-    }
-
-    // Get the current top 10 teams
-    let top_10_teams: HashMap<TeamId, TeamPosition> = ctfd_client.get_top_10_teams().await.unwrap();
-
-    // For a given team in the current top 10
-    //     Check if they increased their position in the top 10 or have entered the top 10
-
-    //     If they increased their position in the top 10
-    //         Announce that they have overtaken the team that was previously at their current position
-        
-    //     If they have entered the top 10
-    //         Announce that they have overtaken the team that was previously at their current position
-
-    for (team_id, position) in top_10_teams.iter() {
-        let team = ctfd_client.get_team(*team_id).await.unwrap();
-        let previous_team_in_position = previous_top_10_teams.iter().find(|(_, p)| **p == *position);
-
-        // If there was no team at the current position then skip
-        if previous_team_in_position.is_none() {
-            continue;
-        } 
-
-        let previous_team = ctfd_client.get_team(*previous_team_in_position.unwrap().0).await.unwrap();
-
-        if previous_top_10_teams.contains_key(team_id) {
-            let previous_position = previous_top_10_teams.get(team_id).unwrap();
-
-            if position < previous_position {
-                webhook
-                    .execute(&http, false, |w| {
-                        w.content(format!("**{}** has overtaken **{}** in the top 10! Landing in position {}", team.name, previous_team.name, position))
-                    })
-                    .await
-                    .expect("Could not execute webhook.");
-            }
-        } else {
-            webhook
-                .execute(&http, false, |w| {
-                    w.content(format!("**{}** has entered the top 10! Overtaking **{}** for position {}", team.name, previous_team.name, position))
-                })
-                .await
-                .expect("Could not execute webhook.");
-        }
-    }
-
-    // Update the top 10 teams in the database
-    db_conn
-        .execute("DELETE FROM top_10_teams;", ())
-        .unwrap();
-
-    for (team_id, position) in top_10_teams.iter() {
-        db_conn
-            .execute(
-                "INSERT INTO top_10_teams (id, position) VALUES (?1, ?2);",
-                (&team_id, &position),
-            )
-            .unwrap();
     }
 }
 
@@ -274,8 +184,6 @@ async fn main() {
 
     loop {
         announce_solves(&http, &webhook, &ctfd_client, &mut announced_solves, &db_conn, args.announce_first_blood_only).await;
-        //announce_top_10_overtakes(&http, &webhook, &ctfd_client, &db_conn).await;
-
         tokio::time::sleep(std::time::Duration::from_secs(args.refresh_interval_seconds)).await;
     }
 }

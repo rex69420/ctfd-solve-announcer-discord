@@ -1,13 +1,13 @@
 # ctfd-solve-announcer-discord
 
-A simple webhook based Discord bot to announce CTFd solves
+A simple webhook based Discord bot to announce CTFd first bloods, forked and modified from [here](https://github.com/jordanbertasso/ctfd-solve-announcer-discord)
 
 ## Usage
 
 Install with
 
 ```bash
-cargo install --git https://github.com/jordanbertasso/ctfd-solve-announcer-discord
+cargo install --git https://github.com/rex69420/ctfd-solve-announcer-discord
 ```
 
 Run with
